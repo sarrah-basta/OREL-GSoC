@@ -7,7 +7,7 @@ import io
 import random
 
 from LLAMOSC.utils import *
-from LLAMOSC.simulation.bid_output_parser import MotivationLevelParser
+from LLAMOSC.simulation.bid_output_parser import QualityRatingParser
 from LLAMOSC.simulation.issue import Issue
 from langchain.schema import SystemMessage, HumanMessage
 
@@ -49,9 +49,9 @@ class ContributorAgent:
         experiences come together to collaborate, learn, and grow.
         The role you are creating is Contributor, and the experience level is {self.experience}.
         Your response should be one of "positive or negative or neutral" sentiment, NOT ALWAYS POSITIVE.
-        Some contributors can be explorers, some can be lurkers, some can be potential leaders & mentors, 
+        Some contributors can eb explorers, some can be lurkers, some can be potential leaders & mentors, 
         some incentivized by funded programs, some just plain selfish. It is your job to pick one of these, 
-        SOEMTIMES POSITIVE SOMETIMES NEGATIVE with equal probability and do the following based on it. 
+        not ALWAYS POSITIVE and do the following based on it. 
         Please reply with a creative description and unique, different-for-everyone 
         backstory of the role, Contributor {self.name}. 
         Especially how they must have entered the community if they are a very low experience level (between 1 t 3)
@@ -94,7 +94,7 @@ class ContributorAgent:
         Generates a motivation level for the contributor based on their role description by using parser.
         """
         # Define the motivation level parser
-        motivation_parser = MotivationLevelParser(
+        motivation_parser = QualityRatingParser(
             regex=r"<(\d)>", output_keys=["rating"], default_output_key="rating"
         )
 
@@ -104,19 +104,11 @@ class ContributorAgent:
         Based on your following role description: {self.role_description}, rate your motivation level from 0 to 10, 
         where 0 is very low and 10 is very high. 
         Your motivation level should be reflective of the role description you have created. 
-        For example, lurkers usually have low motivation whereas potential leaders have high motivation whereas explorers have medium motivation and so on.
-        {motivation_parser.get_format_instructions()}
-        Do nothing else.
+        For example, lurkers usually have low motivation whereas potential leaders have high motivation.
+        Explorers have medium motivation and so on.
         """
-        motivation_level_desc = query_ollama(prompt=prompt_motivation)
-        log(f"Generated motivation level description: {motivation_level_desc}")
-        try:
-            motivation_level = int(
-                motivation_parser.parse(motivation_level_desc)["rating"]
-            )
-        except:
-            motivation_level = 5  # neutral motivation level
-        log(f"Generated initial motivation level: {motivation_level}")
+        motivation_level = query_ollama(prompt=prompt_motivation)
+        log_and_print(f"Generated motivation level: {motivation_level}")
         return motivation_level
 
     def eligible_for_issue(self, issue):
@@ -137,7 +129,7 @@ class ContributorAgent:
         base_increase = min(5 - self.experience, adding_exp)
 
         # Apply variability: experience increase could be a bit more or less than the base
-        variability = random.uniform(0.4, 0.6)  # Adjusted to ensure at least 0.5 change
+        variability = random.uniform(-0.2, 0.2)  # Adjust variability range as needed
         variability_adjusted_increase = base_increase + variability
 
         # Scale the increase based on task difficulty (optional: adjust scaling factor)
@@ -149,13 +141,13 @@ class ContributorAgent:
         final_increase = min(difficulty_adjusted_increase, 5 - self.experience)
 
         # Increase experience
-        self.experience += round(final_increase, 2)
+        self.experience += final_increase
 
         # Optional: Print or log experience changes for debugging
-        print(f"Experience increased by: {round(final_increase, 2):.2f}")
+        print(f"Experience increased by: {final_increase:.2f}")
 
     def update_motivation_level(
-        self, success=True, bid_selected=False, task_difficulty=3, code_quality=4
+        self, success=True, bid_selected=True, task_difficulty=5, code_quality=5
     ):
         # Use the history of motivation to adjust the current motivation level
         if len(self.motivation_history) > 0:
@@ -163,61 +155,62 @@ class ContributorAgent:
                 self.motivation_history
             )
             # Adjust motivation increase/decrease based on past trends
-            motivation_trend = (self.motivation_level - average_past_motivation) * 0.2
+            motivation_trend = (self.motivation_level - average_past_motivation) * 0.1
         else:
             motivation_trend = 0
 
         # If the contributor was not selected for the task
         if not bid_selected:
             # Decrease motivation based on not being selected
-            motivation_decrease = max(
-                min(self.motivation_level, 0.05 * task_difficulty), 0.5
-            )
+            motivation_decrease = min(self.motivation_level, 0.05 * task_difficulty)
             self.motivation_level -= motivation_decrease
             # Skip other updates related to success, task_difficulty, and code_quality
         else:
             # Adjust motivation based on whether the contributor's PR was merged
             if success:
-                motivation_increase = max(
-                    min(10 - self.motivation_level, 0.1 * task_difficulty), 0.5
+                motivation_increase = min(
+                    10 - self.motivation_level, 0.1 * task_difficulty
                 )
                 self.motivation_level += motivation_increase
             else:
-                motivation_decrease = max(
-                    min(self.motivation_level, 0.1 * task_difficulty), 0.5
-                )
+                motivation_decrease = min(self.motivation_level, 0.1 * task_difficulty)
                 self.motivation_level -= motivation_decrease
 
             # Adjust motivation based on code quality (0-5 scale)
             if code_quality > 4:
-                motivation_increase = max(0.1 * (code_quality - 4), 0.5)
+                motivation_increase = 0.1 * (
+                    code_quality - 4
+                )  # Code quality > 4 is good
                 self.motivation_level += motivation_increase
             elif code_quality < 2:
-                motivation_decrease = max(0.1 * (2 - code_quality), 0.5)
+                motivation_decrease = 0.1 * (
+                    2 - code_quality
+                )  # Code quality < 2 is poor
                 self.motivation_level -= motivation_decrease
             else:  # Code quality between 2 and 4
                 if code_quality <= 3:
-                    motivation_decrease = max(0.05 * (3 - code_quality), 0.5)
+                    motivation_decrease = 0.05 * (
+                        3 - code_quality
+                    )  # Moderate decrease for lower values
                     self.motivation_level -= motivation_decrease
                 elif code_quality > 3:
-                    motivation_increase = max(0.05 * (code_quality - 3), 0.5)
+                    motivation_increase = 0.05 * (
+                        code_quality - 3
+                    )  # Moderate increase for higher values
                     self.motivation_level += motivation_increase
 
         # Apply small random fluctuation to simulate real-life variability
-        fluctuation = random.uniform(0.4, 0.6)  # Ensures at least 0.5 change
-        self.motivation_level += (
-            fluctuation if random.choice([True, False]) else -fluctuation
-        )
+        self.motivation_level += random.uniform(-0.1, 0.1)
 
         # Incorporate historical trend adjustment
         self.motivation_level += motivation_trend
 
         # Clip motivation level to stay within 0 to 10
-        self.motivation_level = max(0, min(10, round(self.motivation_level, 2)))
+        self.motivation_level = max(0, min(10, self.motivation_level))
 
         # Track the history of motivation
         self.motivation_history.append(self.motivation_level)
-        log("!!-------------------------------------------------!!")
+
         log_and_print(
             f"Motivation level for contributor {self.name}: {self.motivation_history}"
         )
@@ -474,31 +467,31 @@ class ContributorAgent:
             exit(1)
 
 
-# # Example Usage
-# if __name__ == "__main__":
+# Example Usage
+if __name__ == "__main__":
 
-#     # Create a ContributorAgent instance
-#     contributor = ContributorAgent(id=1, experience=4, name="John Doe")
+    # Create a ContributorAgent instance
+    contributor = ContributorAgent(id=1, experience=4, name="John Doe")
 
-#     current_folder = os.path.dirname(os.path.abspath(__file__))
-#     project_dir = os.path.join(
-#         current_folder, "..", "..", "..", "..", "calculator_project"
-#     )
+    current_folder = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.join(
+        current_folder, "..", "..", "..", "..", "calculator_project"
+    )
 
-#     # Assign a mock issue (assuming issue object with id and difficulty attributes)
-#     issue = type(
-#         "Issue",
-#         (object,),
-#         {
-#             "id": 101,
-#             "difficulty": 2,
-#             "filepath": "D:\Personal_Projects\GSoC_24\calculator_project_base_copy\issues\task_2.md",
-#         },
-#     )
-#     contributor.assign_issue(issue)
+    # Assign a mock issue (assuming issue object with id and difficulty attributes)
+    issue = type(
+        "Issue",
+        (object,),
+        {
+            "id": 101,
+            "difficulty": 2,
+            "filepath": "D:\Personal_Projects\GSoC_24\calculator_project_base_copy\issues\task_2.md",
+        },
+    )
+    contributor.assign_issue(issue)
 
-#     # # Solve the issue
-#     # contributor.solve_issue_without_acr(project_dir)
+    # # Solve the issue
+    # contributor.solve_issue_without_acr(project_dir)
 
 
 # c = ContributorAgent(1, 2, "John")

@@ -9,3 +9,8 @@ class BidOutputParser(RegexParser):
 class QualityRatingParser(RegexParser):
     def get_format_instructions(self) -> str:
         return "Your response should be an integer between 1 and 5, delimited by angled brackets, like this: <int>."
+
+
+class MotivationLevelParser(RegexParser):
+    def get_format_instructions(self) -> str:
+        return "Your response should be an integer between 1 and 10, always unique, delimited by angled brackets, like this: <int>."
